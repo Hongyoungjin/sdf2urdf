@@ -1,29 +1,25 @@
 import numpy as np
+import os
 
 class sdf2urdf:
 
     def __init__(self):
 
         self.sdf_path  = 'PATH/TO/SDF/FILE'
-        self.urdf_path = 'PATH/TO/URDF/FILE'
+        self.urdf_path = '/PATH/TO/URDF/FILE'
 
-        self.sdf = self.sdf_refine()
-        self.sdf = self.remove_comments()
+        self.sdf = self.sdf_refine(self.sdf_path)
 
     # Filter out meaningless strings
-    def sdf_refine(self):
+    def sdf_refine(self,path):
 
-        sdf = open(self.sdf_path,'r')
+        sdf = open(path,'r')
         sdf = sdf.readlines()
         sdf = [line.strip() for line in sdf]
         sdf = np.array(sdf)
 
-        return sdf
-
-    # Remove comments to prevent adverse convertion
-    def remove_comments(self):
-
-        nodes = self.find_nodes('<!--','-->','generous','generous')
+        # Remove comments to prevent adverse convertion
+        nodes = self.find_nodes(sdf,'<!--','-->','generous','generous')
         comment_indices = np.zeros(1)
 
         for node in nodes:
@@ -31,17 +27,23 @@ class sdf2urdf:
             comment_indices = np.append(comment_indices,comment_index)
             
         comment_indices = list(comment_indices[1:].astype(int))
-        sdf = np.delete(self.sdf,comment_indices)
+        sdf = np.delete(sdf,comment_indices)
         return sdf
-    
-    # Find any element that contains certain keyword
-    def find_index(self,keyword_start):
 
-        elements = [s for s in self.sdf if keyword_start in s]
+    # Find the file path by its name
+    def find(self,name,path):
+        for root, dirs, files in os.walk(path):
+            if name in dirs:
+                return os.path.join(root, name)
+
+    # Find any element that contains certain keyword
+    def find_index(self,sdf,keyword):
+
+        elements = [s for s in sdf if keyword in s]
         indices = np.zeros(1)
 
         for element in elements:
-            index = np.where(self.sdf == element)
+            index = np.where(sdf == element)
             indices = np.append(indices,index)
 
         indices = indices[1:]
@@ -49,29 +51,29 @@ class sdf2urdf:
         return indices
 
     # Find where </link name ..> ... </link> or </joint name .. > ... </joint> is
-    def find_nodes(self,keyword_start,keyword_end,start_option,end_option):
+    def find_nodes(self,sdf,keyword_start,keyword_end,start_option,end_option):
 
         nodes = np.zeros((1,2))
         if start_option == 'finicky': # Used when finding <include> statements
-            indices_start = np.where(self.sdf == keyword_start)[0]
+            indices_start = np.where(sdf == keyword_start)[0]
 
         if start_option == 'generous': # Used when finding <link> & <joint> statements
-            indices_start = self.find_index(keyword_start)
+            indices_start = self.find_index(sdf,keyword_start)
 
         if end_option == 'finicky': # Used to find link and joint statements
-            indices_end   = np.where(self.sdf == keyword_end)[0]
+            indices_end   = np.where(sdf == keyword_end)[0]
 
         if end_option == 'generous':  # Used when removing comments
-            indices_end   = self.find_index(keyword_end)
+            indices_end   = self.find_index(sdf,keyword_end)
 
         # Group two sequential elements; first is starting index, and second is ending index
         for i in range(len(indices_start)):
             node = np.array([indices_start[i],indices_end[i]]).reshape((1,2))
             nodes = np.append(nodes,node,axis=0)
-            
+
         return nodes[1:]
 
-    # convert </model> to </robot>
+    # Convert </robot>
     def convert_robot(self):
 
         model_start = [s for s in self.sdf if 'model name=' in s][0]
@@ -79,93 +81,169 @@ class sdf2urdf:
         
         return np.array(robot_start + '\n').reshape((1,1))
     
-    # convert </link> 
-    def convert_link(self):
-        
-        # 1. Get link info from "link" Statement
-        nodes_from_link = self.find_nodes('link name=','</link>','generous','finicky')
+    # convert </link> to </link>
+    def convert_link(self,sdf):
 
-        # 2. Get link info from "include" Statement
-        nodes_from_include = self.find_nodes('<include>','</include>','finicky','finicky')
-        
-        nodes = np.append(nodes_from_link,nodes_from_include,axis=0)
-        
+        nodes = self.find_nodes(sdf,'link name=','</link>','generous','finicky')
         link_urdf = np.zeros(1)
-        
 
         for node in nodes: # Convert in every link statement
             
-            statement = self.sdf[int(node[0]) : int(node[1])+1]
-            
+            link = sdf[int(node[0]) : int(node[1])+1]
 
-            # 'Link' statement has visual line
-            try: # Catch visual name
-                visual = str([s for s in statement if 'visual name=' in s][0])
-                # Catch link name
-                link = str(statement[0])
-                
+            # Catch link name
+            link_name = str(link[0])
+            # Catch visual name
+            visual = link_name.replace('link','visual')
 
-            # But 'include' statement does not.
-            except: 
-                # Define visual name
-                name_line = str([s for s in statement if '<name>' in s][0])
+            # Catch mesh from mesh path
+            mesh = [s for s in link if '<uri>' in s]
+            if len(mesh)>0:
+                mesh = str(mesh[0])
+                mesh = mesh.replace("<uri>","")
+                mesh = mesh.replace("</uri>","")
+                mesh = mesh.replace("model","package")
+                mesh = "'" + mesh + "'"
 
-                name_line = name_line.replace("<name>","")
-                name      = name_line.replace("</name>","")
-                visual = '<visual name=' + "'" + name + "'" + '>'
+            # Catch mesh from figure description
+            else:
+                box      = [s for s in link if '<box>' in s]
+                if len(box)>0:
+                    size = str([s for s in link if '<size>' in s][0])
+                    size = size.replace("<size>","")
+                    size = size.replace("</size>","")
 
-                # Catch link name 
-                link   = '<link name=' + "'" + name + "'" + '>'
-            
-            # Catch 3D model import path
-            model_line = str([s for s in statement if '<uri>' in s][0])
-            model_line = model_line.replace("<uri>","")
-            model_line = model_line[:-6]
-            model_path = model_line.replace("model","package")
-            model_path = "'" + model_path + "'"
+                    fig = "<box size=" + "'" + size +  "'/>\n"
+
+                cylinder = [s for s in link if '<cylinder>' in s]
+                if len(cylinder)> 0:
+                    radius = str([s for s in link if '<radius>' in s][0])
+                    radius = radius.replace("<radius>","")
+                    radius = radius.replace("</radius>","")
+
+                    length = str([s for s in link if '<length>' in s][0])
+                    length = length.replace("<length>","")
+                    length = length.replace("</length>","")
+
+                    fig = "<cylinder radius=" + "'" + radius + "' length ='" + length +"'/>\n"
+
+                sphere   = [s for s in link if '<sphere>' in s]
+                if len(sphere) > 0:
+                    radius = str([s for s in link if '<radius>' in s][0])
+                    radius = radius.replace("<radius>","")
+                    radius = radius.replace("</radius>","")
+
+                    fig = "<sphere radius=" + "'" + radius +  "'/>\n"
+
+            # Catch material
+            try: 
+                material = str([s for s in link if '<material>' in s][0])
+                color    = str([s for s in link if '<emissive>' in s][0])
+                color    = color.replace('<emissive>','')
+                color    = color.replace('</emissive>','')
+                color    = "<material name='noname'>" + '\n'+ "    <color rgba='" + color + "'/>"+"\n" + '</material>' +'\n'
+
+            except:
+                color = ''
+                pass
 
             # Catch scale
-            # 'Link' statement has scale info
             try: 
-                scale_line = str([s for s in statement if '<scale>' in s][0])
-                scale_line = scale_line.replace("<scale>","")
-                scale      = scale_line.replace("</scale>","")
-                scale      = "'" + ' scale=' + scale  + "'"
-            
-            # But scale info is optional.
+                scale = str([s for s in link if '<scale>' in s][0])
+                scale = scale.replace("<scale>","")
+                scale = scale.replace("</scale>","")
+                scale = " scale='" + scale  + "'"
             except:
                 scale = ''
                 pass
 
-            # Catch origin
-            pose_line = str([s for s in statement if '<pose>' in s][0])
-            pose_line = pose_line.replace("<pose>","")
-            pose      = pose_line.replace("</pose>","")
-            x,y,z = pose.split()[0:3]
-            r,p,y = pose.split()[3:6]
-            xyz = "'" + x + " " + y + " " + z + " " + "'"
-            rpy = "'" + r + " " + p + " " + y + " " + "'"
-
+            # Catch pose > origin
+            pose = [s for s in link if '<pose>' in s]
+            if len(pose)>0:
+                pose = str(pose[0])
+                pose = pose.replace("<pose>","")
+                pose = pose.replace("</pose>","")
+                x,y,z,= pose.split()[0:3]
+                roll,pitch,yaw = pose.split()[3:6]
+                origin = "'" + x + " " + y + " " + z + "' rpy='" + roll + " " + pitch + " " + yaw + " " + "'"
+            else:
+                origin = ' '
+            
             # Rewrite in urdf form 
-            link_temp = np.array([
-            link + '\n',
+            link1 = np.array([
+            link_name + '\n',
             ' ' + visual + "\n",
-            '  <origin ' + xyz + rpy + '/>\n',
-            '  <geometry>\n',
-            '   <mesh filename =' + model_path + scale + '/>' , '\n'
-            '  <geometry>\n',
+            '  <origin ' + origin + '/>\n',
+            '  <geometry>\n'])
+            if len(mesh)>0:
+                link2 = np.array(['   <mesh filename =' + mesh + scale + '/>\n',])
+            else:
+                link2 = np.array([fig])
+            link3 = np.array(['  <geometry>\n'])
+            link4 = np.array([color])
+            link5 = np.array([
             ' </visual>\n',
             '</link>\n'])
-
+            link_temp = np.concatenate((link1,link2,link3,link4,link5),axis=0)
             link_urdf = np.append(link_urdf,link_temp)
         link_urdf = link_urdf[1:]
         
         return link_urdf
 
+    # convert </include> to </link>
+    def convert_include(self):
+
+        nodes = self.find_nodes(self.sdf,'<include>','</include>','finicky','finicky')
+        include_urdf = np.zeros(1)
+
+        for node in nodes: # Convert in every include statement
+            
+            include = self.sdf[int(node[0]) : int(node[1])+1]
+            # Catch name
+            name = str([s for s in include if '<name>' in s][0])
+            name = name.replace("<name>","")
+            name = name.replace("</name>","")
+
+            # Define link name 
+            link_name   = '<link name=' + "'" + name + "'" + '>'
+
+            # Define visual name
+            visual = '<visual name=' + "'" + name + "'" + '>'
+
+            # Catch origin
+            pose = str([s for s in include if '<pose>' in s][0])
+            pose = pose.replace("<pose>","")
+            pose = pose.replace("</pose>","")
+            x,y,z,= pose.split()[0:3]
+            roll,pitch,yaw = pose.split()[3:6]
+            origin = "'" + x + " " + y + " " + z + "' rpy='" + roll + " " + pitch + " " + yaw + " " + "'"
+            # Get sdf path
+            model_name = str([s for s in include if '<uri>' in s][0])
+            model_name = model_name.replace("<uri>model://","")
+            model_name = model_name.replace("</uri>","")
+
+            # Open inner sdf file 
+            model_path = self.find(model_name,'.')
+            sdf_path = model_path + '/model.sdf'
+
+            # Rewrite in urdf form
+            sdf = self.sdf_refine(sdf_path)
+            include_temp = self.convert_link(sdf)
+
+            include_temp[0] = link_name + '\n'
+            include_temp[1] = ' ' + visual + "\n"
+            include_temp[2] = '  <origin ' + origin + '/>\n'
+
+            include_urdf = np.append(include_urdf,include_temp)
+
+        include_urdf = include_urdf[1:]
+        
+        return include_urdf
+
     # convert </joint> 
     def convert_joint(self):
         
-        nodes = self.find_nodes('joint name=','</joint>','generous','finicky')        
+        nodes = self.find_nodes(self.sdf,'joint name=','</joint>','generous','finicky')        
         joint_urdf = np.zeros(1)
 
         for node in nodes: # Convert in every joint statement
@@ -176,25 +254,25 @@ class sdf2urdf:
             
             # Catch axis
             try: 
-                xyz_line = str([s for s in statement if '<xyz>' in s][0])
-                xyz_line = xyz_line.replace("<xyz>","")
-                xyz      = xyz_line.replace("</xyz>","")
-                xyz      = ' <axis xyz=' + "'" + xyz + "'/>\n"
+                xyz = str([s for s in statement if '<xyz>' in s][0])
+                xyz = xyz.replace("<xyz>","")
+                xyz = xyz.replace("</xyz>","")
+                xyz = ' <axis xyz=' + "'" + xyz + "'/>\n"
 
             except:
                 xyz = ''
             
             # Catch parent link
-            parent_line = str([s for s in statement if '<parent>' in s][0])
-            parent_line = parent_line.replace("<parent>","")
-            parent      = parent_line.replace("</parent>","")
-            parent      = parent.replace('::link','')
+            parent = str([s for s in statement if '<parent>' in s][0])
+            parent = parent.replace("<parent>","")
+            parent = parent.replace("</parent>","")
+            parent = parent.replace('::link','')
 
             # Catch child link
-            child_line = str([s for s in statement if '<child>' in s][0])
-            child_line = child_line.replace("<child>","")
-            child      = child_line.replace("</child>","")
-            child      = child.replace("::link",'')
+            child = str([s for s in statement if '<child>' in s][0])
+            child = child.replace("<child>","")
+            child = child.replace("</child>","")
+            child = child.replace("::link",'')
 
             # Rewrite in urdf form 
             joint_temp = np.array([
@@ -222,8 +300,11 @@ class sdf2urdf:
         # </robot> start
         lines = np.append(lines,self.convert_robot().reshape((1,1)),axis=1)
         # </link>
-        for i in range(len(self.convert_link())):
-            lines = np.append(lines,np.array(self.convert_link()[i]).reshape((1,1)),axis=1)
+        for i in range(len(self.convert_link(self.sdf))):
+            lines = np.append(lines,np.array(self.convert_link(self.sdf)[i]).reshape((1,1)),axis=1)
+        # </include>
+        for i in range(len(self.convert_include())):
+            lines = np.append(lines,np.array(self.convert_include()[i]).reshape((1,1)),axis=1)
         # </joint>
         for i in range(len(self.convert_joint())):
             lines = np.append(lines,np.array(self.convert_joint()[i]).reshape((1,1)),axis=1)
