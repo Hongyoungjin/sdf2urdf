@@ -6,8 +6,8 @@ class sdf2urdf:
 
     def __init__(self):
 
-        self.sdf_path  = '/home/hongyoungjin/ws/sdf/sample_resources/models/CLOi_porter/model.sdf'
-        self.urdf_path = './cloi.urdf'
+        self.sdf_path  = '/path/to/sdf/model.sdf'
+        self.urdf_path = '/path/to/urdf.urdf'
 
         self.sdf = self.sdf_refine(self.sdf_path)
 
