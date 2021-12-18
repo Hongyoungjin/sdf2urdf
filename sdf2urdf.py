@@ -5,9 +5,13 @@ from math import pi
 class sdf2urdf:
 
     def __init__(self):
+        
+        model_name = 'model_name' # You can manually change its format
 
-        self.sdf_path  = '/path/to/sdf.sdf'
-        self.urdf_path = '/path/to/urdf.urdf'
+        self.model_path_from_package_name = 'robot_urdf/models' # In URDF, it first finds rospkg name, and mesh path in the package.
+
+        self.sdf_path  = '/home/hongyoungjin/ws/sdf/sample_resources/models/' + model_name + '/model.sdf'
+        self.urdf_path = '/home/hongyoungjin/VREP/models/robot_urdf/'  + model_name + '.urdf'
 
         self.sdf = self.sdf_refine(self.sdf_path)
 
@@ -110,8 +114,10 @@ class sdf2urdf:
 
             # Catch link name
             link_name = str(link[0])
+            link_name = link_name + '\n'
             # Catch visual name
             visual = link_name.replace('link','visual')
+            visual = ' ' + visual
 
             # Catch mesh from mesh path
             mesh = [s for s in link if '<uri>' in s]
@@ -119,21 +125,19 @@ class sdf2urdf:
                 mesh = str(mesh[0])
                 mesh = mesh.replace("<uri>","")
                 mesh = mesh.replace("</uri>","")
-                mesh = mesh.replace("model","package")
+                mesh = mesh.replace("model://","package://" + self.model_path_from_package_name + '/')
                 mesh = "'" + mesh + "'"
 
             # Catch mesh from figure description
             else:
-                box      = [s for s in link if '<box>' in s]
-                if len(box)>0:
+                if '<box>' in link:
                     size = str([s for s in link if '<size>' in s][0])
                     size = size.replace("<size>","")
                     size = size.replace("</size>","")
 
                     fig = "<box size=" + "'" + size +  "'/>\n"
 
-                cylinder = [s for s in link if '<cylinder>' in s]
-                if len(cylinder)> 0:
+                if '<cylinder>' in link:
                     radius = str([s for s in link if '<radius>' in s][0])
                     radius = radius.replace("<radius>","")
                     radius = radius.replace("</radius>","")
@@ -144,8 +148,7 @@ class sdf2urdf:
 
                     fig = "<cylinder radius=" + "'" + radius + "' length ='" + length +"'/>\n"
 
-                sphere   = [s for s in link if '<sphere>' in s]
-                if len(sphere) > 0:
+                if '<sphere>' in link:
                     radius = str([s for s in link if '<radius>' in s][0])
                     radius = radius.replace("<radius>","")
                     radius = radius.replace("</radius>","")
@@ -153,54 +156,48 @@ class sdf2urdf:
                     fig = "<sphere radius=" + "'" + radius +  "'/>\n"
 
             # Catch material
-            try: 
-                material = str([s for s in link if '<material>' in s][0])
+            if '<material>' in link:
                 color    = str([s for s in link if '<emissive>' in s][0])
                 color    = color.replace('<emissive>','')
                 color    = color.replace('</emissive>','')
                 color    = "<material name='noname'>" + '\n'+ "    <color rgba='" + color + "'/>"+"\n" + '</material>' +'\n'
 
-            except:
+            else:
                 color = ''
-                pass
 
             # Catch scale
-            try: 
+            if '<scale>' in link:
                 scale = str([s for s in link if '<scale>' in s][0])
                 scale = scale.replace("<scale>","")
                 scale = scale.replace("</scale>","")
                 scale = " scale='" + scale  + "'"
-            except:
+            else:
                 scale = ''
-                pass
 
             # Catch pose > origin
-            pose = [s for s in link if '<pose>' in s]
-            if len(pose)>0:
+            if '<pose>' in link:
+                pose = [s for s in link if '<pose>' in s]
                 pose = str(pose[0])
                 pose = pose.replace("<pose>","")
                 pose = pose.replace("</pose>","")
                 x,y,z,= pose.split()[0:3]
                 roll,pitch,yaw = pose.split()[3:6]
                 origin = "xyz='" + x + " " + y + " " + z + "' rpy='" + roll + " " + pitch + " " + yaw + " " + "'"
+                origin = '  <origin ' + origin + '/>\n'
             else:
                 origin = ''
             
             # Rewrite in urdf form 
-            link1 = [
-            link_name + '\n',
-            ' ' + visual + "\n",
-            '  <origin ' + origin + '/>\n',
-            '  <geometry>\n']
+            link1 = [link_name,visual,origin,'  <geometry>\n']
+            
             if len(mesh)>0:
                 link2 = ['   <mesh filename =' + mesh + scale + '/>\n']
             else:
                 link2 = [fig]
             link3 = ['  </geometry>\n']
             link4 = [color]
-            link5 = [
-            ' </visual>\n',
-            '</link>\n\n']
+            link5 = [' </visual>\n','</link>\n\n']
+
             link_temp = []
             link_temp.append(link1)
             link_temp.append(link2)
@@ -227,18 +224,22 @@ class sdf2urdf:
             name = name.replace("</name>","")
 
             # Define link name 
-            link_name   = '<link name=' + "'" + name + "'" + '>'
+            link_name   = '<link name=' + "'" + name + "'" + '>\n'
 
             # Define visual name
-            visual = '<visual name=' + "'" + name + "'" + '>'
+            visual = ' <visual name=' + "'" + name + "'" + '>\n'
 
             # Catch origin
-            pose = str([s for s in include if '<pose>' in s][0])
-            pose = pose.replace("<pose>","")
-            pose = pose.replace("</pose>","")
-            x,y,z,= pose.split()[0:3]
-            roll,pitch,yaw = pose.split()[3:6]
-            origin = "xyz='" + x + " " + y + " " + z + "' rpy='" + roll + " " + pitch + " " + yaw + " " + "'"
+            if '<pose>' in include:
+                pose = str([s for s in include if '<pose>' in s][0])
+                pose = pose.replace("<pose>","")
+                pose = pose.replace("</pose>","")
+                x,y,z,= pose.split()[0:3]
+                roll,pitch,yaw = pose.split()[3:6]
+                origin = "xyz='" + x + " " + y + " " + z + "' rpy='" + roll + " " + pitch + " " + yaw + " " + "'"
+                origin = '  <origin ' + origin + "/>" + "\n"
+            else:
+                origin = ''
 
             # Get sdf path
             model_name = str([s for s in include if '<uri>' in s][0])
@@ -253,9 +254,9 @@ class sdf2urdf:
             sdf = self.sdf_refine(sdf_path)
             include_temp = self.convert_link(sdf)[0]
 
-            include_temp[0][0] = link_name + '\n'
-            include_temp[0][1] = ' ' + visual + "\n"
-            include_temp[0][2] = '  <origin ' + origin + "/>" + "\n"
+            include_temp[0][0] = link_name
+            include_temp[0][1] = visual
+            include_temp[0][2] = origin
 
             include_urdf.append(include_temp)
 
