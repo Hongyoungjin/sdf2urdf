@@ -1,12 +1,13 @@
 import numpy as np
 import os
+from math import pi
 
 class sdf2urdf:
 
     def __init__(self):
 
-        self.sdf_path  = 'PATH/TO/SDF/FILE'
-        self.urdf_path = '/PATH/TO/URDF/FILE'
+        self.sdf_path  = '/home/hongyoungjin/ws/sdf/sample_resources/models/CLOi_porter/model.sdf'
+        self.urdf_path = './cloi.urdf'
 
         self.sdf = self.sdf_refine(self.sdf_path)
 
@@ -35,6 +36,22 @@ class sdf2urdf:
         for root, dirs, files in os.walk(path):
             if name in dirs:
                 return os.path.join(root, name)
+    
+    def purge(self,node_list):
+        joined_list = []
+
+        for node in node_list:
+            joined_node = []
+            for lines in node:
+                # Concatenate several node lines into a line
+                joined_line = ''.join(lines)
+                joined_node.append(joined_line)
+            # Concatenate all lines of a node into one sentence
+            joined_node = ''.join(joined_node)
+            joined_list.append(joined_node)
+        # Eliminate all node duplicates
+        uniques = list(dict.fromkeys(joined_list))
+        return uniques
 
     # Find any element that contains certain keyword
     def find_index(self,sdf,keyword):
@@ -79,13 +96,13 @@ class sdf2urdf:
         model_start = [s for s in self.sdf if 'model name=' in s][0]
         robot_start = model_start.replace("model","robot") 
         
-        return np.array(robot_start + '\n').reshape((1,1))
+        return robot_start + '\n'
     
     # convert </link> to </link>
     def convert_link(self,sdf):
 
         nodes = self.find_nodes(sdf,'link name=','</link>','generous','finicky')
-        link_urdf = np.zeros(1)
+        link_urdf = []
 
         for node in nodes: # Convert in every link statement
             
@@ -165,36 +182,41 @@ class sdf2urdf:
                 pose = pose.replace("</pose>","")
                 x,y,z,= pose.split()[0:3]
                 roll,pitch,yaw = pose.split()[3:6]
-                origin = "'" + x + " " + y + " " + z + "' rpy='" + roll + " " + pitch + " " + yaw + " " + "'"
+                origin = "xyz='" + x + " " + y + " " + z + "' rpy='" + roll + " " + pitch + " " + yaw + " " + "'"
             else:
-                origin = ' '
+                origin = ''
             
             # Rewrite in urdf form 
-            link1 = np.array([
+            link1 = [
             link_name + '\n',
             ' ' + visual + "\n",
             '  <origin ' + origin + '/>\n',
-            '  <geometry>\n'])
+            '  <geometry>\n']
             if len(mesh)>0:
-                link2 = np.array(['   <mesh filename =' + mesh + scale + '/>\n',])
+                link2 = ['   <mesh filename =' + mesh + scale + '/>\n']
             else:
-                link2 = np.array([fig])
-            link3 = np.array(['  <geometry>\n'])
-            link4 = np.array([color])
-            link5 = np.array([
+                link2 = [fig]
+            link3 = ['  </geometry>\n']
+            link4 = [color]
+            link5 = [
             ' </visual>\n',
-            '</link>\n'])
-            link_temp = np.concatenate((link1,link2,link3,link4,link5),axis=0)
-            link_urdf = np.append(link_urdf,link_temp)
-        link_urdf = link_urdf[1:]
-        
+            '</link>\n\n']
+            link_temp = []
+            link_temp.append(link1)
+            link_temp.append(link2)
+            link_temp.append(link3)
+            link_temp.append(link4)
+            link_temp.append(link5)
+
+            link_urdf.append(link_temp)
+
         return link_urdf
 
     # convert </include> to </link>
     def convert_include(self):
 
         nodes = self.find_nodes(self.sdf,'<include>','</include>','finicky','finicky')
-        include_urdf = np.zeros(1)
+        include_urdf = []
 
         for node in nodes: # Convert in every include statement
             
@@ -216,7 +238,8 @@ class sdf2urdf:
             pose = pose.replace("</pose>","")
             x,y,z,= pose.split()[0:3]
             roll,pitch,yaw = pose.split()[3:6]
-            origin = "'" + x + " " + y + " " + z + "' rpy='" + roll + " " + pitch + " " + yaw + " " + "'"
+            origin = "xyz='" + x + " " + y + " " + z + "' rpy='" + roll + " " + pitch + " " + yaw + " " + "'"
+
             # Get sdf path
             model_name = str([s for s in include if '<uri>' in s][0])
             model_name = model_name.replace("<uri>model://","")
@@ -228,29 +251,31 @@ class sdf2urdf:
 
             # Rewrite in urdf form
             sdf = self.sdf_refine(sdf_path)
-            include_temp = self.convert_link(sdf)
+            include_temp = self.convert_link(sdf)[0]
 
-            include_temp[0] = link_name + '\n'
-            include_temp[1] = ' ' + visual + "\n"
-            include_temp[2] = '  <origin ' + origin + '/>\n'
+            include_temp[0][0] = link_name + '\n'
+            include_temp[0][1] = ' ' + visual + "\n"
+            include_temp[0][2] = '  <origin ' + origin + "/>" + "\n"
 
-            include_urdf = np.append(include_urdf,include_temp)
+            include_urdf.append(include_temp)
 
-        include_urdf = include_urdf[1:]
-        
         return include_urdf
 
     # convert </joint> 
     def convert_joint(self):
         
         nodes = self.find_nodes(self.sdf,'joint name=','</joint>','generous','finicky')        
-        joint_urdf = np.zeros(1)
+        joint_urdf = []
 
         for node in nodes: # Convert in every joint statement
             
             statement = self.sdf[int(node[0]) : int(node[1])+1]
             # Catch joint name
-            joint = statement[0]
+            joint = str(statement[0])
+
+            # Unify the joint types into "fixed"
+            joint = joint.replace('prismatic','fixed')
+            joint = joint.replace('revolute','fixed')
             
             # Catch axis
             try: 
@@ -266,56 +291,94 @@ class sdf2urdf:
             parent = str([s for s in statement if '<parent>' in s][0])
             parent = parent.replace("<parent>","")
             parent = parent.replace("</parent>","")
-            parent = parent.replace('::link','')
+            # Omit the uri notation of sdf
+            if ":" in parent:
+                truncate = parent.index(":")
+                parent   = parent[:truncate]
 
             # Catch child link
             child = str([s for s in statement if '<child>' in s][0])
             child = child.replace("<child>","")
             child = child.replace("</child>","")
-            child = child.replace("::link",'')
+            # Omit the uri notation of sdf
+            if ":" in child:
+                truncate = child.index(":")
+                child    = child[:truncate]
+
+
+
+            limit = ''
+
+            # # Catch limits
+            # limit = '\n'
+            # if '<limit>' in statement: # mostly in prismatic
+            #     limit_up = str([s for s in statement if '<upper>' in s][0])
+            #     limit_up = limit_up.replace("<upper>","")
+            #     limit_up = limit_up.replace("</upper>","")
+
+            #     limit_low = str([s for s in statement if '<lower>' in s][0])
+            #     limit_low = limit_low.replace("<lower>","")
+            #     limit_low = limit_low.replace("</lower>","")
+
+            #     limit = "<limit lower='" + limit_low + "' upper='" + limit_up + "' />\n"
+
+            # elif 'revolute' in statement: # mostly in rotational joint. If nothing is specified, keep it continuous
+            #     limit = "<limit lower='" + "0" + "' upper='" + "2*pi" + "' />\n"
+            # else:
+            #     limit = "<limit lower='" + "0" + "' upper='" + "0" + "' />\n"
+
 
             # Rewrite in urdf form 
-            joint_temp = np.array([
+            joint_temp = [
             joint + '\n',
             xyz,
             ' <parent link=' + "'" + parent + "'" + '/>\n',
             ' <child link='  + "'" + child  + "'" + '/>\n',
-            '</joint>\n'])
+            limit,
+            '</joint>\n\n']
 
-            joint_urdf = np.append(joint_urdf,joint_temp)
-        
-        joint_urdf = joint_urdf[1:]
-       
+            joint_urdf.append(joint_temp)
+
         return joint_urdf
 
     def write_urdf(self):
 
-        lines = np.zeros(1).reshape((1,1))
-
+        lines = []
+        # Open the file
         urdf = open(self.urdf_path,'w')
-        # Reset the file
-        urdf.truncate(0) 
-        # Define xml version
-        lines = np.append(lines,np.array('<?xml version="1.0"?>' + '\n').reshape((1,1)),axis=1)
-        # </robot> start
-        lines = np.append(lines,self.convert_robot().reshape((1,1)),axis=1)
-        # </link>
-        for i in range(len(self.convert_link(self.sdf))):
-            lines = np.append(lines,np.array(self.convert_link(self.sdf)[i]).reshape((1,1)),axis=1)
-        # </include>
-        for i in range(len(self.convert_include())):
-            lines = np.append(lines,np.array(self.convert_include()[i]).reshape((1,1)),axis=1)
-        # </joint>
-        for i in range(len(self.convert_joint())):
-            lines = np.append(lines,np.array(self.convert_joint()[i]).reshape((1,1)),axis=1)
-        # </robot> end
-        lines = np.append(lines,np.array('</robot>').reshape((1,1)),axis=1)
 
-        
-        lines = list(lines[0][1:])
-        
+        # Initialize the file
+        urdf.truncate(0) 
+
+        # Define xml version
+        lines.append('<?xml version="1.0"?>' + '\n')
+
+        # </robot> 
+        lines.append(self.convert_robot())
+
+        # </link>
+        link_lines = self.convert_link(self.sdf)
+        link_lines = self.purge(link_lines)
+        for link in link_lines:
+            lines.append(link)
+
+        # </include>
+        include_lines = self.convert_include()
+        include_lines = self.purge(include_lines)
+        for include in include_lines:
+            lines.append(include)
+
+        # </joint>
+        joint_lines = self.convert_joint()
+        joint_lines = self.purge(joint_lines)
+        for joint in joint_lines:
+            lines.append(joint)
+
+        # </robot> end
+        lines.append('</robot>')
 
         urdf.writelines(lines)
+
         return urdf
 
 if __name__=='__main__':
